@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>운동장 인원 세기 AI</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<style>
+:root{--bg:#f6f4ec;--card:#fffdf7;--line:#ddd6c3;--ink:#1f3a2e;--soft:#4a5a51;--accent:#e07a1f;--blue:#2f6fb5;--green:#5e9a5c;--warn:#b85c0e;--chip:#ede8da}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15201b;--card:#1d2a24;--line:#33443b;--ink:#eef3ee;--soft:#b9c8bd;--accent:#f0913a;--blue:#6ea4e6;--green:#8dbf8b;--warn:#f6b26b;--chip:#26362e}}
+:root[data-theme="dark"]{--bg:#15201b;--card:#1d2a24;--line:#33443b;--ink:#eef3ee;--soft:#b9c8bd;--accent:#f0913a;--blue:#6ea4e6;--green:#8dbf8b;--warn:#f6b26b;--chip:#26362e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;line-height:1.5}
+header{padding:20px 16px 8px;max-width:1200px;margin:0 auto}
+h1{font-size:26px;margin:0}
+header p{margin:4px 0 0;color:var(--soft)}
+main{max-width:1200px;margin:0 auto;padding:8px 16px 32px;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
+@media (max-width:860px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.card h2{font-size:17px;margin:0 0 10px}
+.stage{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:16/9}
+.stage canvas{width:100%;height:100%;display:block}
+.stage .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#ddd;text-align:center;padding:16px}
+.big{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.count{font-size:64px;font-weight:800;line-height:1}
+.count small{font-size:20px;font-weight:600;color:var(--soft)}
+.level{font-size:22px;font-weight:800;padding:6px 18px;border-radius:999px;background:var(--chip)}
+.level.low{background:var(--green);color:#10230f}.level.mid{background:var(--blue);color:#fff}.level.high{background:var(--accent);color:#1f1300}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+label{font-size:14px;color:var(--soft)}
+input[type=number]{width:84px}
+input,select,button{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+button{cursor:pointer;font-weight:700}
+button.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.status{font-size:14px;padding:4px 10px;border-radius:999px;background:var(--chip)}
+.status.ok{background:var(--green);color:#10230f}
+.note{font-size:13px;color:var(--soft);margin:6px 0 0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border-bottom:1px solid var(--line);padding:5px 4px;text-align:left}
+details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:12px}
+summary{font-weight:700;cursor:pointer}
+pre{background:var(--chip);padding:12px;border-radius:8px;overflow:auto;font-size:13px;white-space:pre}
+.full{grid-column:1/-1}
+</style>
+</head>
+<body>
+<header>
+<h1>운동장 인원 세기 AI · 마이크로비트 연결</h1>
+<p>카메라 화면에서 AI(COCO-SSD 사물 인식)가 사람을 찾아 세고, 한산·보통·붐빔 단계를 블루투스로 마이크로비트에 보냅니다. 사진과 영상은 저장하지 않습니다.</p>
+</header>
+<main>
+<section>
+  <div class="card">
+    <div class="stage"><canvas id="view" width="1280" height="720"></canvas><div class="msg" id="stageMsg">AI 모델을 불러오는 중입니다…</div></div>
+    <div class="row">
+      <label><input type="checkbox" id="blur" checked> 화면 흐리게 보기(얼굴 보호)</label>
+      <label><input type="checkbox" id="boxes" checked> 찾은 사람 표시</label>
+    </div>
+  </div>
+  <div class="card">
+    <div class="big">
+      <div class="count" id="count">–<small> 명</small></div>
+      <div class="level" id="level">대기</div>
+    </div>
+    <p class="note" id="countNote">최근 3번 센 값의 가운데 값을 씁니다. 멀리 있거나 겹친 사람은 덜 셀 수 있어서, 직접 센 인원과 꼭 비교하세요.</p>
+  </div>
+  <div class="card">
+    <h2>기록 (직접 센 인원과 비교)</h2>
+    <div class="row">
+      <label>직접 센 인원 <input type="number" id="manual" min="0" placeholder="예: 120"></label>
+      <button id="logBtn">지금 기록하기</button>
+      <label><input type="checkbox" id="autoLog"> 1분마다 자동 기록</label>
+    </div>
+    <div class="row">
+      <button id="csvBtn">CSV 내려받기</button>
+      <button id="clearBtn">기록 지우기</button>
+      <span class="note" id="logCount">기록 0개</span>
+    </div>
+    <table><thead><tr><th>시각</th><th>장소</th><th>AI 인원</th><th>직접 센 인원</th><th>단계</th></tr></thead><tbody id="logBody"></tbody></table>
+  </div>
+</section>
+<section>
+  <div class="card">
+    <h2>1. 카메라</h2>
+    <div class="row">
+      <select id="camSel"><option value="">카메라 선택</option></select>
+      <button class="primary" id="camBtn" disabled>시작</button>
+    </div>
+    <div class="row">
+      <label>AI 모델 <select id="modelSel"><option value="mobilenet_v2">정확하게 (조금 느림)</option><option value="lite_mobilenet_v2">빠르게</option></select></label>
+    </div>
+    <div class="row">
+      <label>세는 간격 <select id="interval"><option value="1000">1초</option><option value="2000" selected>2초</option><option value="5000">5초</option></select></label>
+      <label>확신도 기준 <input type="range" id="score" min="0.2" max="0.7" step="0.05" value="0.35"> <span id="scoreVal">0.35</span></label>
+    </div>
+    <p class="note">확신도 기준을 낮추면 더 많이 찾지만 사람이 아닌 것을 셀 수도 있습니다. 직접 센 인원과 비교하며 맞춰 보세요.</p>
+  </div>
+  <div class="card">
+    <h2>2. 장소와 기준</h2>
+    <div class="row">
+      <label><input type="radio" name="place" value="운동장" checked> 운동장</label>
+      <label><input type="radio" name="place" value="중정마당"> 중정마당</label>
+    </div>
+    <div class="row">
+      <label>보통 시작 <input type="number" id="tMid" min="1"> 명</label>
+      <label>붐빔 시작 <input type="number" id="tHigh" min="1"> 명</label>
+    </div>
+    <p class="note">처음 값은 계획서의 예시 기준입니다(운동장 80·140명, 중정마당 20·40명). 실제 데이터를 보고 팀이 정한 기준으로 바꾸세요.</p>
+  </div>
+  <div class="card">
+    <h2>3. 마이크로비트</h2>
+    <div class="row">
+      <button class="primary" id="btBtn">블루투스 연결</button>
+      <span class="status" id="btStatus">연결 안 됨</span>
+    </div>
+    <div class="row">
+      <label>보낼 내용 <select id="sendMode"><option value="level">단계 (low / mid / high)</option><option value="count">인원 숫자 (예: 37)</option><option value="both">둘 다 (예: high,37)</option></select></label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="autoSend" checked> 바뀔 때 자동으로 보내기</label>
+      <button id="sendNow">지금 보내기</button>
+    </div>
+    <p class="note" id="lastSent">아직 보낸 값이 없습니다.</p>
+    <p class="note" id="btSupport"></p>
+  </div>
+</section>
+
+<section class="full">
+<details open>
+<summary>사용 순서</summary>
+<ol>
+<li>크롬 브라우저(노트북 또는 안드로이드 태블릿)에서 이 파일을 엽니다. 인터넷 연결이 필요합니다(AI 모델을 불러옴). 아이폰·아이패드는 웹 블루투스를 지원하지 않습니다.</li>
+<li>마이크로비트 A에 아래 'A 코드'를 넣습니다. 메이크코드 프로젝트 설정에서 <b>누구나 블루투스로 연결(No Pairing Required)</b>을 꼭 켭니다.</li>
+<li>카메라를 고르고 <b>시작</b>을 누릅니다. 창가처럼 높은 곳에서 운동장 전체가 보이게 고정합니다.</li>
+<li><b>블루투스 연결</b>을 눌러 마이크로비트 A를 고릅니다(이름: BBC micro:bit [다섯 글자]).</li>
+<li>단계가 바뀌면 마이크로비트로 <code>low</code>, <code>mid</code>, <code>high</code>가 갑니다. 멈추면 <code>stop</code>이 갑니다. 모든 메시지 끝에는 줄바꿈이 붙습니다.</li>
+<li>직접 센 인원을 입력하고 <b>지금 기록하기</b>를 눌러 AI와 비교합니다. 기록은 CSV로 내려받습니다.</li>
+</ol>
+<p class="note">개인정보: 영상은 이 기기 안에서만 분석되고 저장되거나 전송되지 않습니다. 촬영 전에 학교의 허락을 받고, 얼굴을 알아볼 수 없도록 멀리서 비추세요.</p>
+</details>
+<details>
+<summary>마이크로비트 A 코드 (블루투스로 받아서 핀으로 전달)</summary>
+<p class="note">메이크코드 → 확장 → bluetooth 추가 → 'JavaScript' 탭에 붙여 넣은 뒤 '블록'으로 바꿔 보세요. 블루투스 확장을 넣으면 라디오는 쓸 수 없어서 B가 따로 필요합니다. A의 P0·P1·GND를 B의 P0·P1·GND에 점퍼선으로 연결합니다.</p>
+<pre id="codeA">let data = ""
+bluetooth.startUartService()
+basic.showIcon(IconNames.SmallDiamond)
+bluetooth.onBluetoothConnected(function () {
+    basic.showIcon(IconNames.Yes)
+})
+bluetooth.onBluetoothDisconnected(function () {
+    basic.showIcon(IconNames.No)
+})
+bluetooth.onUartDataReceived(serial.delimiters(Delimiters.NewLine), function () {
+    data = bluetooth.uartReadUntil(serial.delimiters(Delimiters.NewLine))
+    if (data == "low") {
+        pins.digitalWritePin(DigitalPin.P0, 0)
+        pins.digitalWritePin(DigitalPin.P1, 0)
+        basic.showIcon(IconNames.Happy)
+    } else if (data == "mid") {
+        pins.digitalWritePin(DigitalPin.P0, 1)
+        pins.digitalWritePin(DigitalPin.P1, 0)
+        basic.showIcon(IconNames.Meh)
+    } else if (data == "high") {
+        pins.digitalWritePin(DigitalPin.P0, 0)
+        pins.digitalWritePin(DigitalPin.P1, 1)
+        basic.showIcon(IconNames.Surprised)
+    } else if (data == "stop") {
+        basic.clearScreen()
+    }
+})</pre>
+<button data-copy="codeA">A 코드 복사</button>
+</details>
+<details>
+<summary>마이크로비트 B 코드 (핀으로 받아서 라디오로 보내기)</summary>
+<pre id="codeB">radio.setGroup(7)
+let level = 0
+basic.forever(function () {
+    level = 0
+    if (pins.digitalReadPin(DigitalPin.P0) == 1) {
+        level = 1
+    }
+    if (pins.digitalReadPin(DigitalPin.P1) == 1) {
+        level = 2
+    }
+    radio.sendNumber(level)
+    basic.showNumber(level)
+    basic.pause(1000)
+})</pre>
+<button data-copy="codeB">B 코드 복사</button>
+</details>
+<details>
+<summary>마이크로비트 C 코드 (운동장 입구 신호등)</summary>
+<pre id="codeC">radio.setGroup(7)
+let lastTime = 0
+radio.onReceivedNumber(function (receivedNumber) {
+    lastTime = input.runningTime()
+    if (receivedNumber == 0) {
+        basic.showIcon(IconNames.Happy)
+    } else if (receivedNumber == 1) {
+        basic.showIcon(IconNames.Meh)
+    } else if (receivedNumber == 2) {
+        basic.showIcon(IconNames.No)
+        music.playTone(523, music.beat(BeatFraction.Quarter))
+    }
+})
+basic.forever(function () {
+    if (input.runningTime() - lastTime > 10000) {
+        basic.showIcon(IconNames.Confused)
+    }
+    basic.pause(1000)
+})</pre>
+<button data-copy="codeC">C 코드 복사</button>
+<p class="note">B와 C는 같은 라디오 그룹(7)이어야 합니다. 10초 넘게 신호가 없으면 C에 '?' 표정이 나옵니다. 창가에서 운동장 입구까지 신호가 닿는지 꼭 시험하세요.</p>
+</details>
+</section>
+</main>
+
+<script>
+(function(){
+const UART_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const UART_RX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // 마이크로비트가 받는 쪽(웹앱이 씀)
+const DEFAULTS = {'운동장': [80, 140], '중정마당': [20, 40]};
+const LEVEL_KO = {low: '한산', mid: '보통', high: '붐빔'};
+
+const $ = id => document.getElementById(id);
+const canvas = $('view'), ctx = canvas.getContext('2d');
+const video = document.createElement('video');
+video.muted = true; video.playsInline = true;
+
+let model = null, modelBase = null, stream = null, running = false, timer = null;
+let lastBoxes = [], history = [], current = {count: null, level: null};
+let device = null, rx = null, writeChain = Promise.resolve(), lastSent = null;
+let logs = [], autoLogTimer = null;
+
+function place(){ return document.querySelector('input[name=place]:checked').value; }
+function setPlaceDefaults(){ const d = DEFAULTS[place()]; $('tMid').value = d[0]; $('tHigh').value = d[1]; }
+setPlaceDefaults();
+document.querySelectorAll('input[name=place]').forEach(r => r.addEventListener('change', () => { setPlaceDefaults(); history = []; updateLevel(); }));
+['tMid','tHigh'].forEach(id => $(id).addEventListener('change', updateLevel));
+$('score').addEventListener('input', () => $('scoreVal').textContent = $('score').value);
+
+if (!('bluetooth' in navigator)) {
+  $('btSupport').textContent = '이 브라우저는 웹 블루투스를 지원하지 않습니다. 노트북이나 안드로이드의 크롬을 쓰세요.';
+  $('btBtn').disabled = true;
+}
+
+async function loadModel(){
+  const base = $('modelSel').value;
+  if (model && modelBase === base) return;
+  $('stageMsg').style.display = 'flex';
+  $('stageMsg').textContent = 'AI 모델을 불러오는 중입니다…';
+  try {
+    if (typeof cocoSsd === 'undefined') throw new Error('AI 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
+    model = await cocoSsd.load({base});
+    modelBase = base;
+    $('stageMsg').textContent = running ? '' : '카메라를 고르고 시작을 누르세요.';
+    if (running) $('stageMsg').style.display = 'none';
+  } catch (e) {
+    $('stageMsg').textContent = '모델을 불러오지 못했습니다: ' + e.message;
+  }
+}
+$('modelSel').addEventListener('change', loadModel);
+
+async function listCameras(){
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const sel = $('camSel'), keep = sel.value;
+    sel.innerHTML = '<option value="">기본 카메라 (후면 우선)</option>';
+    devs.forEach((d, i) => { const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || ('카메라 ' + (i + 1)); sel.appendChild(o); });
+    if (keep) sel.value = keep;
+  } catch (e) { /* 권한 전에는 이름이 비어 있을 수 있음 */ }
+  $('camBtn').disabled = false;
+}
+
+async function startCamera(){
+  stopCamera();
+  const id = $('camSel').value;
+  const constraints = {audio: false, video: id ? {deviceId: {exact: id}, width: {ideal: 1280}, height: {ideal: 720}} : {facingMode: {ideal: 'environment'}, width: {ideal: 1280}, height: {ideal: 720}}};
+  stream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth || 1280; canvas.height = video.videoHeight || 720;
+  running = true;
+  $('camBtn').textContent = '정지';
+  $('stageMsg').style.display = model ? 'none' : 'flex';
+  listCameras();
+  scheduleDetect();
+}
+
+function stopCamera(){
+  running = false;
+  clearTimeout(timer);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; lastBoxes = [];
+  $('camBtn').textContent = '시작';
+}
+
+$('camBtn').addEventListener('click', async () => {
+  if (running) {
+    stopCamera(); send('stop');
+    $('stageMsg').style.display = 'flex'; $('stageMsg').textContent = '정지했습니다.';
+    return;
+  }
+  try { await startCamera(); }
+  catch (e) {
+    $('stageMsg').style.display = 'flex';
+    let help = '카메라를 켤 수 없습니다: ' + e.message;
+    if (e.name === 'NotAllowedError') help = '카메라 권한이 막혀 있습니다. 주소창 왼쪽 아이콘(ⓘ 또는 카메라 모양)을 눌러 카메라를 "허용"으로 바꾸고 새로고침하세요. 크롬 브라우저에서 직접 열었는지도 확인하세요.';
+    else if (e.name === 'NotReadableError') help = '다른 프로그램(줌, 팀즈, 카메라 앱 등)이 카메라를 쓰고 있습니다. 그 프로그램을 닫고 다시 시작하세요.';
+    else if (e.name === 'NotFoundError' || e.name === 'OverconstrainedError') help = '선택한 카메라를 찾을 수 없습니다. 카메라 목록에서 다른 카메라를 고르거나 "기본 카메라"로 바꿔 보세요.';
+    $('stageMsg').textContent = help;
+  }
+});
+
+function scheduleDetect(){
+  clearTimeout(timer);
+  if (!running) return;
+  timer = setTimeout(detectOnce, Number($('interval').value));
+}
+
+async function detectOnce(){
+  if (!running) return;
+  if (model && video.readyState >= 2) {
+    try {
+      const preds = await model.detect(video, 100, Number($('score').value));
+      const people = preds.filter(p => p.class === 'person');
+      lastBoxes = people.map(p => p.bbox);
+      history.push(people.length);
+      if (history.length > 3) history.shift();
+      const sorted = [...history].sort((a, b) => a - b);
+      current.count = sorted[Math.floor(sorted.length / 2)];
+      updateLevel();
+    } catch (e) { console.log('[운동장AI] 인식 오류', e); }
+  }
+  scheduleDetect();
+}
+
+function levelFor(n){
+  const mid = Number($('tMid').value), high = Number($('tHigh').value);
+  if (n >= high) return 'high';
+  if (n >= mid) return 'mid';
+  return 'low';
+}
+
+function updateLevel(){
+  if (current.count === null) return;
+  current.level = levelFor(current.count);
+  $('count').innerHTML = current.count + '<small> 명</small>';
+  const lv = $('level');
+  lv.textContent = LEVEL_KO[current.level] + ' (' + current.level + ')';
+  lv.className = 'level ' + current.level;
+  if ($('autoSend').checked) {
+    const msg = message();
+    if (msg !== lastSent) send(msg);
+  }
+}
+
+function message(){
+  const mode = $('sendMode').value;
+  if (mode === 'count') return String(current.count);
+  if (mode === 'both') return current.level + ',' + current.count;
+  return current.level;
+}
+
+function draw(){
+  if (running && video.readyState >= 2) {
+    ctx.filter = $('blur').checked ? 'blur(10px)' : 'none';
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.filter = 'none';
+    if ($('boxes').checked) {
+      ctx.lineWidth = Math.max(2, canvas.width / 400);
+      ctx.strokeStyle = '#f6b26b';
+      lastBoxes.forEach(([x, y, w, h]) => ctx.strokeRect(x, y, w, h));
+    }
+  } else if (!running) {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ---- 블루투스 ----
+$('btBtn').addEventListener('click', async () => {
+  if (device && device.gatt.connected) { device.gatt.disconnect(); return; }
+  try {
+    device = await navigator.bluetooth.requestDevice({filters: [{namePrefix: 'BBC micro:bit'}], optionalServices: [UART_SERVICE]});
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    $('btStatus').textContent = '연결 중…';
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(UART_SERVICE);
+    rx = await service.getCharacteristic(UART_RX);
+    $('btStatus').textContent = '연결됨: ' + device.name;
+    $('btStatus').className = 'status ok';
+    $('btBtn').textContent = '연결 끊기';
+    lastSent = null;
+    if (current.level) send(message());
+  } catch (e) {
+    $('btStatus').textContent = '연결 실패: ' + e.message;
+    $('btStatus').className = 'status';
+  }
+});
+
+function onDisconnected(){
+  rx = null;
+  $('btStatus').textContent = '연결 끊김';
+  $('btStatus').className = 'status';
+  $('btBtn').textContent = '블루투스 연결';
+}
+
+function send(msg){
+  if (!rx) return;
+  const bytes = new TextEncoder().encode(msg + '\n');
+  writeChain = writeChain.then(() => rx.writeValue(bytes)).then(() => {
+    lastSent = msg;
+    $('lastSent').textContent = '마지막으로 보낸 값: ' + msg + ' (' + new Date().toLocaleTimeString('ko-KR') + ')';
+  }).catch(e => { $('lastSent').textContent = '보내기 실패: ' + e.message; });
+}
+$('sendNow').addEventListener('click', () => { if (current.level) send(message()); });
+$('sendMode').addEventListener('change', () => { lastSent = null; updateLevel(); });
+
+// ---- 기록 ----
+function addLog(){
+  if (current.count === null) return;
+  const m = $('manual').value;
+  const now = new Date();
+  logs.push({date: now.toLocaleDateString('sv-SE'), time: now.toTimeString().slice(0, 8), place: place(), ai: current.count, manual: m === '' ? '' : Number(m), level: LEVEL_KO[current.level]});
+  renderLogs();
+}
+function renderLogs(){
+  const rows = logs.slice(-12).reverse().map(l => '<tr><td>' + l.time + '</td><td>' + l.place + '</td><td>' + l.ai + '</td><td>' + (l.manual === '' ? '-' : l.manual) + '</td><td>' + l.level + '</td></tr>').join('');
+  $('logBody').innerHTML = rows;
+  $('logCount').textContent = '기록 ' + logs.length + '개';
+}
+$('logBtn').addEventListener('click', addLog);
+$('autoLog').addEventListener('change', () => {
+  clearInterval(autoLogTimer);
+  if ($('autoLog').checked) autoLogTimer = setInterval(addLog, 60000);
+});
+$('clearBtn').addEventListener('click', () => { if (logs.length && window.confirm('기록을 모두 지울까요?')) { logs = []; renderLogs(); } });
+$('csvBtn').addEventListener('click', () => {
+  const head = '날짜,시각,장소,AI인원,직접센인원,단계\n';
+  const body = logs.map(l => [l.date, l.time, l.place, l.ai, l.manual, l.level].join(',')).join('\n');
+  const blob = new Blob(['﻿' + head + body], {type: 'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = '운동장_AI인원기록_' + new Date().toLocaleDateString('sv-SE') + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($(b.dataset.copy).textContent); b.textContent = '복사했어요!'; }
+  catch (e) { b.textContent = '복사가 안 되면 직접 선택해서 복사하세요'; }
+}));
+
+listCameras();
+loadModel();
+})();
+</script>
+</body>
+</html>
